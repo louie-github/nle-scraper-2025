@@ -1,5 +1,4 @@
-import { Effect, String as EString, pipe, Schedule } from "effect";
-import type { UnknownException } from "effect/Cause";
+import { Console, Effect, Match, pipe, Schedule } from "effect";
 import {
   getDataUrl,
   getPrecinctUrl,
@@ -8,33 +7,44 @@ import {
   type ElectionReturnData,
 } from "./utils";
 
-const fetchJson = (url: URL) =>
+class FileNotFoundError {
+  readonly _tag = "FileNotFoundError";
+}
+
+class UnknownStatusCodeError {
+  readonly _tag = "UnknownStatusCodeError";
+}
+
+const fetchRetryJsonData = (
+  url: URL,
+  policy: Schedule.Schedule<any, any, never> = Schedule.intersect(
+    Schedule.recurs(5),
+    Schedule.exponential("100 millis"),
+  ),
+) =>
   pipe(
     Effect.tryPromise(() => fetch(url)),
-    Effect.flatMap((response) =>
-      response.status === 200
-        ? Effect.promise(() => response.json())
-        : response.status === 403
-          ? Effect.succeed(null)
-          : Effect.fail(
-              new Error("Unhandled status code (not 200, not 403)"),
-            ),
+    Effect.andThen((response) =>
+      Match.value(response.status).pipe(
+        Match.when(200, () => Effect.promise(() => response.json())),
+        Match.when(403, () => Effect.fail(new FileNotFoundError())),
+        Match.orElse(() => Effect.fail(new UnknownStatusCodeError())),
+      ),
     ),
-  ) as Effect.Effect<
-    RegionData | ElectionReturnData | null,
-    UnknownException | Error,
-    never
-  >;
-
-const fetchRetryJson = (url: URL) =>
-  Effect.retry(
-    fetchJson(url),
-    Schedule.union(
-      Schedule.recurs(5),
-      Schedule.exponential("100 millis"),
-    ),
+    Effect.retry(policy),
   );
 
-const program = pipe(fetchRetryJson(getDataUrl("0")));
+const program = pipe(
+  getErUrl("24020443"),
+  fetchRetryJsonData,
+  Effect.catchTag("FileNotFoundError", () => Console.log("403 Error.")),
+  Effect.catchTag("UnknownStatusCodeError", () =>
+    Console.log("Unknown status code encountered."),
+  ),
+  Effect.catchTag("UnknownException", () =>
+    Console.log("Unknown exception occurred while fetching JSON data."),
+  ),
+  Effect.tap(console.log),
+);
 
-Effect.runPromise(program).then(console.log);
+Effect.runPromise(program);

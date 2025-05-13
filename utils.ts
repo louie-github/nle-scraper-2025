@@ -1,3 +1,5 @@
+import { String as EString } from "effect";
+
 export const GENERAL_DATA_URL = new URL(
   "https://2025electionresults.comelec.gov.ph/data/regions/local/",
 );
