@@ -6,6 +6,8 @@ import {
   type RegionData,
   type ElectionReturnData,
 } from "./utils";
+import { promises as fs } from "node:fs";
+import path from "path";
 
 class FileNotFoundError {
   readonly _tag = "FileNotFoundError";
@@ -34,17 +36,28 @@ const fetchRetryJsonData = (
     Effect.retry(policy),
   );
 
-const program = pipe(
-  getErUrl("24020443"),
-  fetchRetryJsonData,
-  Effect.catchTag("FileNotFoundError", () => Console.log("403 Error.")),
-  Effect.catchTag("UnknownStatusCodeError", () =>
-    Console.log("Unknown status code encountered."),
-  ),
-  Effect.catchTag("UnknownException", () =>
-    Console.log("Unknown exception occurred while fetching JSON data."),
-  ),
-  Effect.tap(console.log),
-);
+const downloadElectionReturn = (
+  precinct_code: string,
+  folderPath: string,
+) =>
+  pipe(
+    getErUrl(precinct_code),
+    fetchRetryJsonData,
+    Effect.andThen((data) =>
+      Effect.tryPromise(() =>
+        fs.writeFile(
+          path.join(folderPath, `${precinct_code}.json`),
+          JSON.stringify(data),
+          "utf8",
+        ),
+      ),
+    ),
+    Effect.andThen(
+      Console.log(`Wrote to file: ${folderPath}/${precinct_code}.json`),
+    ),
+    Effect.catchAll((err) =>
+      Console.log(`Error retrieving ${precinct_code}.json: ${err}`),
+    ),
+  );
 
-Effect.runPromise(program);
+Effect.runPromise(downloadElectionReturn("24020443", "."));
