@@ -1,43 +1,12 @@
 import { Effect, String as EString, pipe, Schedule } from "effect";
 import type { UnknownException } from "effect/Cause";
-import { All } from "effect/LogLevel";
-
-const GENERAL_DATA_URL = new URL(
-  "https://2025electionresults.comelec.gov.ph/data/regions/local/",
-);
-const PRECINCT_DATA_URL = new URL(
-  "https://2025electionresults.comelec.gov.ph/data/regions/precinct/",
-);
-const ER_DATA_URL = new URL(
-  "https://2025electionresults.comelec.gov.ph/data/er/",
-);
-
-interface RegionData {
-  regions: [
-    {
-      categoryCode: string | null;
-      masterCode: string | null;
-      code: string;
-      name: string;
-    },
-  ];
-}
-
-type ElectionReturnData = any;
-
-function getDataUrl(code: string, url: URL = GENERAL_DATA_URL) {
-  return new URL(`${code}.json`, url);
-}
-
-function getPrecinctUrl(code: string) {
-  const prefix = EString.takeLeft(code, 2);
-  return new URL(`${prefix}/${code}.json`, PRECINCT_DATA_URL);
-}
-
-function getErUrl(code: string) {
-  const prefix = EString.takeLeft(code, 3);
-  return new URL(`${prefix}/${code}.json`, ER_DATA_URL);
-}
+import {
+  getDataUrl,
+  getPrecinctUrl,
+  getErUrl,
+  type RegionData,
+  type ElectionReturnData,
+} from "./utils";
 
 const fetchJson = (url: URL) =>
   pipe(
