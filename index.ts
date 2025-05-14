@@ -142,41 +142,53 @@ const program = Effect.gen(function* () {
   if (regions === null) {
     throw new Error("Failed to get initial region list!");
   }
-  for (const region of regions.regions) {
-    const regionData = yield* fetchAreaData(region.code);
-    if (regionData === null) continue;
 
-    for (const province of regionData.regions) {
-      const provinceData = yield* fetchAreaData(province.code);
-      if (provinceData === null) continue;
+  yield* Effect.forEach(
+    regions.regions,
+    (region) =>
+      Effect.gen(function* () {
+        const regionData = yield* fetchAreaData(region.code);
+        if (regionData === null) return;
 
-      for (const city of provinceData.regions) {
-        const cityData = yield* fetchAreaData(city.code);
-        if (cityData === null) continue;
+        for (const province of regionData.regions) {
+          const provinceData = yield* fetchAreaData(province.code);
+          if (provinceData === null) continue;
 
-        for (const barangay of cityData.regions) {
-          const barangayData = yield* fetchPrecinctData(barangay.code);
-          if (barangayData === null) continue;
+          for (const city of provinceData.regions) {
+            const cityData = yield* fetchAreaData(city.code);
+            if (cityData === null) continue;
 
-          for (const precinct of barangayData.regions) {
-            const precinctData = yield* fetchErData(precinct.code);
-            if (precinctData === null) continue;
+            for (const barangay of cityData.regions) {
+              const barangayData = yield* fetchPrecinctData(
+                barangay.code,
+              );
+              if (barangayData === null) continue;
 
-            const filename = precinct.code.trim() + ".json";
-            const folderPath = path.join(
-              DATA_DIRECTORY,
-              region.name.replaceAll("/", "-").trim(),
-              province.name.replaceAll("/", "-").trim(),
-              city.name.replaceAll("/", "-").trim(),
-              barangay.name.replaceAll("/", "-").trim(),
-            );
-            console.log(`Saving: ${folderPath}/${filename}`);
-            yield* saveDataToFile(filename, precinctData, folderPath);
+              for (const precinct of barangayData.regions) {
+                const precinctData = yield* fetchErData(precinct.code);
+                if (precinctData === null) continue;
+
+                const filename = precinct.code.trim() + ".json";
+                const folderPath = path.join(
+                  DATA_DIRECTORY,
+                  region.name.replaceAll("/", "-").trim(),
+                  province.name.replaceAll("/", "-").trim(),
+                  city.name.replaceAll("/", "-").trim(),
+                  barangay.name.replaceAll("/", "-").trim(),
+                );
+                console.log(`Saving: ${folderPath}/${filename}`);
+                yield* saveDataToFile(
+                  filename,
+                  precinctData,
+                  folderPath,
+                );
+              }
+            }
           }
         }
-      }
-    }
-  }
+      }),
+    { concurrency: 8 },
+  );
 });
 
 Effect.runPromise(program);
