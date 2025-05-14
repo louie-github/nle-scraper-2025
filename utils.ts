@@ -19,7 +19,11 @@ export interface Region {
 export interface RegionData {
   regions: Region[];
 }
-export type ElectionReturnData = any;
+export type ElectionReturnData = {
+  _tag: "ElectionReturnData";
+};
+
+export type DataOrNull = RegionData | ElectionReturnData | null;
 
 export function getDataUrl(code: string, url: URL = GENERAL_DATA_URL) {
   return new URL(`${code}.json`, url);

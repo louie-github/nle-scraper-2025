@@ -1,13 +1,15 @@
 import { Console, Effect, Match, pipe, Schedule } from "effect";
 import {
   getDataUrl,
-  getPrecinctUrl,
-  getErUrl,
   type RegionData,
   type ElectionReturnData,
+  GENERAL_DATA_URL,
+  type DataOrNull,
+  type Region,
 } from "./utils";
 import { promises as fs } from "node:fs";
 import path from "path";
+import type { UnknownException } from "effect/Cause";
 
 class FileNotFoundError {
   readonly _tag = "FileNotFoundError";
@@ -25,39 +27,86 @@ const fetchRetryJsonData = (
   ),
 ) =>
   pipe(
-    Effect.tryPromise(() => fetch(url)),
+    Effect.tryPromise(() => fetch(url))
     Effect.andThen((response) =>
       Match.value(response.status).pipe(
         Match.when(200, () => Effect.promise(() => response.json())),
-        Match.when(403, () => Effect.fail(new FileNotFoundError())),
+        Match.when(403, () => {
+          console.log(response);
+          return Effect.fail(new FileNotFoundError());
+        }),
         Match.orElse(() => Effect.fail(new UnknownStatusCodeError())),
       ),
     ),
     Effect.retry(policy),
-  );
+  ) as Effect.Effect<
+    RegionData | ElectionReturnData,
+    FileNotFoundError | UnknownStatusCodeError | UnknownException,
+    never
+  >;
 
-const downloadElectionReturn = (
-  precinct_code: string,
+function saveData(
+  code: string,
+  data: RegionData | ElectionReturnData,
   folderPath: string,
+) {
+  return Effect.tryPromise(() =>
+    fs.writeFile(
+      path.join(folderPath, `${code}.json`),
+      JSON.stringify(data),
+      "utf8",
+    ),
+  );
+}
+
+const fetchData = (code: string, url_prefix: URL = GENERAL_DATA_URL) =>
+  fetchRetryJsonData(getDataUrl(code, url_prefix));
+
+const fetchAndSaveData = (
+  code: string,
+  folderPath: string,
+  url_prefix: URL = GENERAL_DATA_URL,
 ) =>
   pipe(
-    getErUrl(precinct_code),
-    fetchRetryJsonData,
-    Effect.andThen((data) =>
-      Effect.tryPromise(() =>
-        fs.writeFile(
-          path.join(folderPath, `${precinct_code}.json`),
-          JSON.stringify(data),
-          "utf8",
+    fetchRetryJsonData(getDataUrl(code, url_prefix)),
+    Effect.tap((data) => saveData(code, data, folderPath)),
+  );
+
+function processRegion(
+  prefix: string,
+  mapFunc: (region: Region) => Effect.Effect<any, never, never>,
+) {
+  return (region: Region) =>
+    pipe(
+      Console.log(prefix + region.name),
+      Effect.andThen(() => fetchData(region.code)),
+      Effect.map((data) => data as RegionData),
+      Effect.andThen((data) =>
+        Effect.all(data.regions.map(mapFunc), { mode: "validate" }),
+      ),
+      Effect.catchAll(() => Console.log("Error encountered!")),
+    );
+}
+
+const program = pipe(
+  fetchData("0"),
+  Effect.orDie,
+  Effect.map((data) => data as RegionData),
+  Effect.andThen((data) =>
+    Effect.all(
+      data.regions.map(
+        processRegion(
+          "Region: ",
+          processRegion(
+            "  > Province: ",
+            processRegion("    > Municipality: ", () =>
+              Effect.succeed(null),
+            ),
+          ),
         ),
       ),
     ),
-    Effect.andThen(
-      Console.log(`Wrote to file: ${folderPath}/${precinct_code}.json`),
-    ),
-    Effect.catchAll((err) =>
-      Console.log(`Error retrieving ${precinct_code}.json: ${err}`),
-    ),
-  );
+  ),
+);
 
-Effect.runPromise(downloadElectionReturn("24020443", "."));
+Effect.runPromise(program);
