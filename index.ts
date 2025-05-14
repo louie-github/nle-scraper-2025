@@ -107,35 +107,6 @@ function getRegionLevelFolder(
   }
 }
 
-function downloadData<T>(
-  area: Area,
-  level: GeoLevel,
-  pathTree: string[],
-  fetcher: (code: string) => Effect.Effect<T | null, never, never>,
-): Effect.Effect<T, never, never> {
-  const prefix = " ".repeat(level.level) + "> ";
-  return Effect.gen(function* () {
-    console.log(prefix + level.name);
-    const data = yield* fetcher(area.code);
-    if (data === null) {
-      console.log(prefix + "| Skipping, could not download JSON...");
-      yield* saveDataToFile(
-        `${area.code}.MISSING.json`,
-        {},
-        path.join(...pathTree),
-      );
-      // Hacky, but it works.
-      return { regions: [] };
-    }
-    yield* saveDataToFile(
-      `${area.code}.json`,
-      data,
-      path.join(...pathTree),
-    );
-    return data;
-  });
-}
-
 const DATA_DIRECTORY = path.join(".", "data");
 const program = Effect.gen(function* () {
   const regions = yield* fetchAreaData(LOCAL_START_CODE);
