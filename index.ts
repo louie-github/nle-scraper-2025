@@ -19,6 +19,7 @@ import { promises as fs } from "node:fs";
 import path from "path";
 import type { UnknownException } from "effect/Cause";
 import { mkdir } from "node:fs/promises";
+import type { Concurrency } from "effect/Types";
 
 class FileNotFoundError {
   readonly _tag = "FileNotFoundError";
@@ -100,13 +101,22 @@ const START_CODE = LOCAL_START_CODE;
 
 function processArea(
   area: Area,
-  f: (area: Area) => Effect.Effect<any, never, never>
+  f: (area: Area) => Effect.Effect<any, never, never>,
+  options?:
+    | {
+        readonly concurrency?: Concurrency | undefined;
+        readonly batching?: boolean | "inherit" | undefined;
+        readonly concurrentFinalizers?: boolean | undefined;
+      }
+    | undefined
 ) {
   return pipe(
     // downloadArea(area.name, area.code, levelName, DATA_DIRECTORY, logPrefix),
     fetchJson(getDataUrl(area.code)),
     Effect.andThen((data) => data as AreaData),
-    Effect.tap((data) => Effect.forEach(data.regions, f, { discard: true })),
+    Effect.tap((data) =>
+      Effect.forEach(data.regions, f, { ...options, discard: true })
+    ),
     Effect.catchAll(() => Effect.succeed(null))
   );
 }
@@ -119,31 +129,37 @@ const program = pipe(
     Effect.forEach(data.regions, (region) =>
       processArea(region, (province) =>
         processArea(province, (city) =>
-          processArea(city, (barangay) =>
-            pipe(
-              fetchJson(getPrecinctUrl(barangay.code)),
-              Effect.andThen((data) => data as AreaData),
-              Effect.tap((data) =>
-                Effect.forEach(data.regions, (precinct) =>
-                  fetchJson(getErUrl(precinct.code)).pipe(
-                    Effect.andThen((data) => data as ErData),
-                    // Represent missing data as empty object
-                    Effect.catchAll(() => Effect.succeed({})),
-                    Effect.tap((data) =>
-                      saveErData(
-                        data,
-                        region,
-                        province,
-                        city,
-                        barangay,
-                        precinct
-                      )
-                    )
+          processArea(
+            city,
+            (barangay) =>
+              pipe(
+                fetchJson(getPrecinctUrl(barangay.code)),
+                Effect.andThen((data) => data as AreaData),
+                Effect.tap((data) =>
+                  Effect.forEach(
+                    data.regions,
+                    (precinct) =>
+                      fetchJson(getErUrl(precinct.code)).pipe(
+                        Effect.andThen((data) => data as ErData),
+                        // Represent missing data as empty object
+                        Effect.catchAll(() => Effect.succeed({})),
+                        Effect.tap((data) =>
+                          saveErData(
+                            data,
+                            region,
+                            province,
+                            city,
+                            barangay,
+                            precinct
+                          )
+                        )
+                      ),
+                    { concurrency: 8 }
                   )
-                )
+                ),
+                Effect.catchAll(() => Effect.succeed(() => null))
               ),
-              Effect.catchAll(() => Effect.succeed(() => null))
-            )
+            { concurrency: 8 }
           )
         )
       )
