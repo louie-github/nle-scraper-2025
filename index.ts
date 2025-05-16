@@ -80,10 +80,10 @@ function saveErData(
 ) {
   const folderPath = path.join(
     DATA_DIRECTORY,
-    region.name.replaceAll("/", "-"),
-    province.name.replaceAll("/", "-"),
-    city.name.replaceAll("/", "-"),
-    barangay.name.replaceAll("/", "-")
+    region.name.replaceAll("/", "-").trim(),
+    province.name.replaceAll("/", "-").trim(),
+    city.name.replaceAll("/", "-").trim(),
+    barangay.name.replaceAll("/", "-".trim())
   );
   const filename = data
     ? `${precinct.code}.json`
