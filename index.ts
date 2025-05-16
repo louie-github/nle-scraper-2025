@@ -12,13 +12,8 @@ import {
   getErUrl,
   type AreaData,
   type ErData,
-  type GeoLevel,
   LOCAL_START_CODE,
   type Area,
-  GLRegion,
-  GLProvince,
-  GLCity,
-  GLBarangay,
 } from "./utils";
 import { promises as fs } from "node:fs";
 import path from "path";
@@ -37,8 +32,8 @@ const fetchJson = (
   url: URL,
   policy: Schedule.Schedule<any, any, never> = Schedule.intersect(
     Schedule.recurs(5),
-    Schedule.exponential("100 millis"),
-  ),
+    Schedule.exponential("100 millis")
+  )
 ) =>
   pipe(
     Effect.tryPromise(() => fetch(url)),
@@ -48,21 +43,17 @@ const fetchJson = (
         // This also fails when Cloudflare blocks the request, but
         // otherwise, this should represent a missing file.
         Match.when(403, () => Effect.fail(new FileNotFoundError())),
-        Match.orElse(() => Effect.fail(new UnknownStatusCodeError())),
-      ),
+        Match.orElse(() => Effect.fail(new UnknownStatusCodeError()))
+      )
     ),
-    Effect.retry(policy),
+    Effect.retry(policy)
   ) as Effect.Effect<
     AreaData | ErData,
     FileNotFoundError | UnknownStatusCodeError | UnknownException,
     never
   >;
 
-function saveDataToFile(
-  filename: string,
-  data: any,
-  folderPath: string,
-) {
+function saveDataToFile(filename: string, data: any, folderPath: string) {
   return pipe(
     Effect.tryPromise(() => mkdir(folderPath, { recursive: true })),
     Effect.andThen(() =>
@@ -70,103 +61,94 @@ function saveDataToFile(
         fs.writeFile(
           path.join(folderPath, `${filename}`),
           JSON.stringify(data),
-          "utf8",
-        ),
-      ),
+          "utf8"
+        )
+      )
     ),
+    Effect.andThen(() => Effect.succeed(path.join(folderPath, filename)))
   );
 }
 
-function fetchAreaData(code: string) {
-  return fetchJson(getDataUrl(code)).pipe(
-    Effect.catchAll(() => Effect.succeed(null)),
-  ) as Effect.Effect<AreaData | null, never, never>;
-}
-function fetchPrecinctData(code: string) {
-  return fetchJson(getPrecinctUrl(code)).pipe(
-    Effect.catchAll(() => Effect.succeed(null)),
-  ) as Effect.Effect<AreaData | null, never, never>;
-}
-function fetchErData(code: string) {
-  return fetchJson(getErUrl(code)).pipe(
-    Effect.catchAll(() => Effect.succeed(null)),
-  ) as Effect.Effect<ErData | null, never, never>;
-}
-
-function getRegionLevelFolder(
-  regionLevel: GeoLevel,
-  baseDirectory: string = "./data",
-): string {
-  if (regionLevel.parent) {
-    return path.join(
-      getRegionLevelFolder(regionLevel.parent),
-      regionLevel.name.replace("/", "-"),
-    );
-  } else {
-    return path.join(baseDirectory, regionLevel.name.replace("/", "-"));
-  }
+function saveErData(
+  data: ErData | {},
+  region: Area,
+  province: Area,
+  city: Area,
+  barangay: Area,
+  precinct: Area
+) {
+  const folderPath = path.join(
+    DATA_DIRECTORY,
+    region.name.replaceAll("/", "-"),
+    province.name.replaceAll("/", "-"),
+    city.name.replaceAll("/", "-"),
+    barangay.name.replaceAll("/", "-")
+  );
+  const filename = data
+    ? `${precinct.code}.json`
+    : `${precinct.code}.MISSING.json`;
+  return pipe(
+    saveDataToFile(filename, data, folderPath),
+    Effect.tap(() =>
+      Console.log(`Saved to file: ${path.join(folderPath, filename)}`)
+    )
+  );
 }
 
 const DATA_DIRECTORY = path.join(".", "data");
-const program = Effect.gen(function* () {
-  const regions = yield* fetchAreaData(LOCAL_START_CODE);
-  if (regions === null) {
-    throw new Error("Failed to get initial region list!");
-  }
+const START_CODE = LOCAL_START_CODE;
 
-  yield* Effect.forEach(
-    regions.regions,
-    (region) =>
-      Effect.gen(function* () {
-        const regionData = yield* fetchAreaData(region.code);
-        if (regionData === null) return;
-
-        yield* Effect.forEach(
-          regionData.regions,
-          (province) =>
-            Effect.gen(function* () {
-              const provinceData = yield* fetchAreaData(province.code);
-              if (provinceData === null) return;
-
-              for (const city of provinceData.regions) {
-                const cityData = yield* fetchAreaData(city.code);
-                if (cityData === null) continue;
-
-                for (const barangay of cityData.regions) {
-                  const barangayData = yield* fetchPrecinctData(
-                    barangay.code,
-                  );
-                  if (barangayData === null) continue;
-
-                  for (const precinct of barangayData.regions) {
-                    const precinctData = yield* fetchErData(
-                      precinct.code,
-                    );
-                    if (precinctData === null) continue;
-
-                    const filename = precinct.code.trim() + ".json";
-                    const folderPath = path.join(
-                      DATA_DIRECTORY,
-                      region.name.replaceAll("/", "-").trim(),
-                      province.name.replaceAll("/", "-").trim(),
-                      city.name.replaceAll("/", "-").trim(),
-                      barangay.name.replaceAll("/", "-").trim(),
-                    );
-                    console.log(`Saving: ${folderPath}/${filename}`);
-                    yield* saveDataToFile(
-                      filename,
-                      precinctData,
-                      folderPath,
-                    );
-                  }
-                }
-              }
-            }),
-          { concurrency: 8 },
-        );
-      }),
-    { concurrency: 8 },
+function processArea(
+  area: Area,
+  f: (area: Area) => Effect.Effect<any, never, never>
+) {
+  return pipe(
+    // downloadArea(area.name, area.code, levelName, DATA_DIRECTORY, logPrefix),
+    fetchJson(getDataUrl(area.code)),
+    Effect.andThen((data) => data as AreaData),
+    Effect.tap((data) => Effect.forEach(data.regions, f, { discard: true })),
+    Effect.catchAll(() => Effect.succeed(null))
   );
-});
+}
+
+const program = pipe(
+  fetchJson(getDataUrl(START_CODE)),
+  Effect.orDie,
+  Effect.andThen((data) => data as AreaData),
+  Effect.tap((data) =>
+    Effect.forEach(data.regions, (region) =>
+      processArea(region, (province) =>
+        processArea(province, (city) =>
+          processArea(city, (barangay) =>
+            pipe(
+              fetchJson(getPrecinctUrl(barangay.code)),
+              Effect.andThen((data) => data as AreaData),
+              Effect.tap((data) =>
+                Effect.forEach(data.regions, (precinct) =>
+                  fetchJson(getErUrl(precinct.code)).pipe(
+                    Effect.andThen((data) => data as ErData),
+                    // Represent missing data as empty object
+                    Effect.catchAll(() => Effect.succeed({})),
+                    Effect.tap((data) =>
+                      saveErData(
+                        data,
+                        region,
+                        province,
+                        city,
+                        barangay,
+                        precinct
+                      )
+                    )
+                  )
+                )
+              ),
+              Effect.catchAll(() => Effect.succeed(() => null))
+            )
+          )
+        )
+      )
+    )
+  )
+);
 
 Effect.runPromise(program);
