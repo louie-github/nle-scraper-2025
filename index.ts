@@ -128,39 +128,42 @@ const program = pipe(
   Effect.tap((data) =>
     Effect.forEach(data.regions, (region) =>
       processArea(region, (province) =>
-        processArea(province, (city) =>
-          processArea(
-            city,
-            (barangay) =>
-              pipe(
-                fetchJson(getPrecinctUrl(barangay.code)),
-                Effect.andThen((data) => data as AreaData),
-                Effect.tap((data) =>
-                  Effect.forEach(
-                    data.regions,
-                    (precinct) =>
-                      fetchJson(getErUrl(precinct.code)).pipe(
-                        Effect.andThen((data) => data as ErData),
-                        // Represent missing data as empty object
-                        Effect.catchAll(() => Effect.succeed({})),
-                        Effect.tap((data) =>
-                          saveErData(
-                            data,
-                            region,
-                            province,
-                            city,
-                            barangay,
-                            precinct
+        processArea(
+          province,
+          (city) =>
+            processArea(
+              city,
+              (barangay) =>
+                pipe(
+                  fetchJson(getPrecinctUrl(barangay.code)),
+                  Effect.andThen((data) => data as AreaData),
+                  Effect.tap((data) =>
+                    Effect.forEach(
+                      data.regions,
+                      (precinct) =>
+                        fetchJson(getErUrl(precinct.code)).pipe(
+                          Effect.andThen((data) => data as ErData),
+                          // Represent missing data as empty object
+                          Effect.catchAll(() => Effect.succeed({})),
+                          Effect.tap((data) =>
+                            saveErData(
+                              data,
+                              region,
+                              province,
+                              city,
+                              barangay,
+                              precinct
+                            )
                           )
-                        )
-                      ),
-                    { concurrency: 8 }
-                  )
+                        ),
+                      { concurrency: 8 }
+                    )
+                  ),
+                  Effect.catchAll(() => Effect.succeed(() => null))
                 ),
-                Effect.catchAll(() => Effect.succeed(() => null))
-              ),
-            { concurrency: 8 }
-          )
+              { concurrency: 8 }
+            ),
+          { concurrency: 8 }
         )
       )
     )
