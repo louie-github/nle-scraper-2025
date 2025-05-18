@@ -54,9 +54,18 @@ const fetchJson = (
     never
   >;
 
-function saveDataToFile(filename: string, data: any, folderPath: string) {
+function saveDataToFile(
+  filename: string,
+  data: any,
+  folderPath: string,
+  makeDirectory: boolean = true
+) {
   return pipe(
-    Effect.tryPromise(() => mkdir(folderPath, { recursive: true })),
+    Effect.if(makeDirectory, {
+      onTrue: () =>
+        Effect.tryPromise(() => mkdir(folderPath, { recursive: true })),
+      onFalse: () => Effect.succeed(null),
+    }),
     Effect.andThen(() =>
       Effect.tryPromise(() =>
         fs.writeFile(
