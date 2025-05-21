@@ -145,7 +145,7 @@ const processArea = (
               data.regions.map((subArea) =>
                 processArea(
                   subArea,
-                  path.join(folderToSaveTo, area.name.replaceAll("/", "_")),
+                  path.join(folderToSaveTo, subArea.name.replaceAll("/", "_")),
                   depth + 1,
                   semaphore
                 ).pipe(Effect.fork)
