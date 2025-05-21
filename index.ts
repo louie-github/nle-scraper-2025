@@ -1,25 +1,61 @@
 import {
   Array as EArray,
-  Console,
   Effect,
   Match,
   pipe,
   Schedule,
+  String as EString,
+  Console,
+  Queue,
+  Option,
+  Chunk,
+  Fiber,
 } from "effect";
-import {
-  getDataUrl,
-  getPrecinctUrl,
-  getErUrl,
-  type AreaData,
-  type ErData,
-  LOCAL_START_CODE,
-  type Area,
-} from "./utils";
+import { type AreaData, type ErData, type Area } from "./utils";
 import { promises as fs } from "node:fs";
 import path from "path";
 import type { UnknownException } from "effect/Cause";
 import { mkdir } from "node:fs/promises";
-import type { Concurrency } from "effect/Types";
+
+function getLocalAreaUrl(code: string) {
+  return new URL(
+    `https://2025electionresults.comelec.gov.ph/data/regions/local/${code}.json`
+  );
+}
+function getOverseasAreaUrl(code: string) {
+  return new URL(
+    `https://2025electionresults.comelec.gov.ph/data/regions/overseas/${code}.json`
+  );
+}
+function getPrecinctDataUrl(code: string) {
+  return new URL(
+    "https://2025electionresults.comelec.gov.ph/data/regions/precinct/" +
+      `${EString.takeLeft(code, 2)}/${code}.json`
+  );
+}
+function getElectionReturnUrl(code: string) {
+  return new URL(
+    "https://2025electionresults.comelec.gov.ph/data/er/" +
+      `${EString.takeLeft(code, 3)}/${code}.json`
+  );
+}
+
+// TODO: Find a better name for this function 😭
+// This is hard-coded, but it should work nonetheless.
+function getUrlBasedOnDepth(
+  code: string,
+  depth: number,
+  isOverseas: boolean = false
+) {
+  // Normal handling for Local ERs and COCs
+  if (depth <= 3) {
+    return (isOverseas ? getOverseasAreaUrl : getLocalAreaUrl)(code);
+  } else if (depth === 4) {
+    return getPrecinctDataUrl(code);
+  } else {
+    return getElectionReturnUrl(code);
+  }
+}
 
 class FileNotFoundError {
   readonly _tag = "FileNotFoundError";
@@ -29,7 +65,13 @@ class UnknownStatusCodeError {
   readonly _tag = "UnknownStatusCodeError";
 }
 
-const fetchJson = (
+// Just a helper error. (Hack!)
+class IsElectionReturn {
+  readonly _tag = "IsElectionReturn";
+}
+
+// Effectful fetch with specific errors
+const fetchUrl = (
   url: URL,
   policy: Schedule.Schedule<any, any, never> = Schedule.intersect(
     Schedule.recurs(5),
@@ -54,10 +96,13 @@ const fetchJson = (
     never
   >;
 
+/* Save a JSON representation of the data to folderPath with filename.
+ * By default, it creates the directory if it does not already exist.
+ */
 function saveDataToFile(
   filename: string,
-  data: any,
   folderPath: string,
+  data: any,
   makeDirectory: boolean = true
 ) {
   return pipe(
@@ -79,104 +124,72 @@ function saveDataToFile(
   );
 }
 
-function saveErData(
-  data: ErData | {},
-  region: Area,
-  province: Area,
-  city: Area,
-  barangay: Area,
-  precinct: Area
-) {
-  const folderPath = path.join(
-    DATA_DIRECTORY,
-    region.name.replaceAll("/", "-").trim(),
-    province.name.replaceAll("/", "-").trim(),
-    city.name.replaceAll("/", "-").trim(),
-    barangay.name.replaceAll("/", "-".trim())
-  );
-  const filename = data
-    ? `${precinct.code}.json`
-    : `${precinct.code}.MISSING.json`;
-  return pipe(
-    saveDataToFile(filename, data, folderPath),
-    Effect.tap(() =>
-      Console.log(`Saved to file: ${path.join(folderPath, filename)}`)
-    )
-  );
+function hasSubAreas(data: AreaData | ErData): data is AreaData {
+  return (data as AreaData).regions !== undefined;
 }
 
-const DATA_DIRECTORY = path.join(".", "data");
-const START_CODE = LOCAL_START_CODE;
-
-function processArea(
+const processArea = (
   area: Area,
-  f: (area: Area) => Effect.Effect<any, never, never>,
-  options?:
-    | {
-        readonly concurrency?: Concurrency | undefined;
-        readonly batching?: boolean | "inherit" | undefined;
-        readonly concurrentFinalizers?: boolean | undefined;
-      }
-    | undefined
-) {
-  return pipe(
-    // downloadArea(area.name, area.code, levelName, DATA_DIRECTORY, logPrefix),
-    fetchJson(getDataUrl(area.code)),
-    Effect.andThen((data) => data as AreaData),
+  folderToSaveTo: string,
+  depth: number,
+  semaphore: Effect.Semaphore
+): Effect.Effect<AreaData | ErData | null, never, never> =>
+  pipe(
+    fetchUrl(getUrlBasedOnDepth(area.code, depth)),
     Effect.tap((data) =>
-      Effect.forEach(data.regions, f, { ...options, discard: true })
+      hasSubAreas(data)
+        ? pipe(
+            saveDataToFile(`_INFO.${area.code}.json`, folderToSaveTo, data),
+            Effect.tap((filename) => Console.log(`Saved: ${filename}`)),
+            Effect.andThen(() =>
+              data.regions.map((subArea) =>
+                processArea(
+                  subArea,
+                  path.join(folderToSaveTo, area.name.replaceAll("/", "_")),
+                  depth + 1,
+                  semaphore
+                ).pipe(Effect.fork)
+              )
+            ),
+            Effect.andThen((effects) => Effect.all(effects)),
+            Effect.andThen((fibers) => Fiber.joinAll(fibers))
+          )
+        : pipe(
+            saveDataToFile(`${area.code}.json`, folderToSaveTo, data),
+            Effect.tap((filename) => Console.log(`Saved: ${filename}`))
+          )
     ),
     Effect.catchAll(() => Effect.succeed(null))
   );
+
+const DATA_DIRECTORY = path.join(".", "data");
+function program(maxThreads: number = 100) {
+  return pipe(
+    fetchUrl(getUrlBasedOnDepth("0", 0)),
+    Effect.orDie,
+    Effect.andThen((data) => data as AreaData),
+    Effect.andThen((data) =>
+      pipe(
+        Effect.makeSemaphore(maxThreads),
+        Effect.andThen((semaphore) => ({
+          data: data,
+          semaphore: semaphore,
+        }))
+      )
+    ),
+    Effect.andThen(({ data, semaphore }) =>
+      data.regions.map((subArea) =>
+        processArea(
+          subArea,
+          path.join(DATA_DIRECTORY, subArea.name.replaceAll("/", "_")),
+          1,
+          semaphore
+        ).pipe(Effect.fork)
+      )
+    ),
+    Effect.andThen((effects) => Effect.all(effects)),
+    Effect.andThen((fibers) => Fiber.joinAll(fibers))
+  );
 }
 
-const program = pipe(
-  fetchJson(getDataUrl(START_CODE)),
-  Effect.orDie,
-  Effect.andThen((data) => data as AreaData),
-  Effect.tap((data) =>
-    Effect.forEach(data.regions, (region) =>
-      processArea(region, (province) =>
-        processArea(
-          province,
-          (city) =>
-            processArea(
-              city,
-              (barangay) =>
-                pipe(
-                  fetchJson(getPrecinctUrl(barangay.code)),
-                  Effect.andThen((data) => data as AreaData),
-                  Effect.tap((data) =>
-                    Effect.forEach(
-                      data.regions,
-                      (precinct) =>
-                        fetchJson(getErUrl(precinct.code)).pipe(
-                          Effect.andThen((data) => data as ErData),
-                          // Represent missing data as empty object
-                          Effect.catchAll(() => Effect.succeed({})),
-                          Effect.tap((data) =>
-                            saveErData(
-                              data,
-                              region,
-                              province,
-                              city,
-                              barangay,
-                              precinct
-                            )
-                          )
-                        ),
-                      { concurrency: 8 }
-                    )
-                  ),
-                  Effect.catchAll(() => Effect.succeed(() => null))
-                ),
-              { concurrency: 8 }
-            ),
-          { concurrency: 8 }
-        )
-      )
-    )
-  )
-);
-
-Effect.runPromise(program);
+Effect.runPromise(program(100));
