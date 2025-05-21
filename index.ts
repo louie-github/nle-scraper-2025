@@ -1,17 +1,17 @@
 import {
+  Console,
   Effect,
+  String as EString,
+  Fiber,
   Match,
   pipe,
   Schedule,
-  String as EString,
-  Console,
-  Fiber,
 } from "effect";
-import { type AreaData, type ErData, type Area } from "./utils";
-import { promises as fs } from "node:fs";
-import path from "path";
 import type { UnknownException } from "effect/Cause";
-import { exists, mkdir } from "node:fs/promises";
+import { promises as fs } from "node:fs";
+import { mkdir } from "node:fs/promises";
+import path from "path";
+import { type Area, type AreaData, type ErData } from "./utils";
 
 function getLocalAreaUrl(code: string) {
   return new URL(
@@ -135,30 +135,40 @@ const processArea = (
   semaphore: Effect.Semaphore
 ): Effect.Effect<AreaData | ErData | null, never, never> =>
   pipe(
-    semaphore.withPermits(1)(fetchUrl(getUrlBasedOnDepth(area.code, depth))),
-    Effect.tap((data) =>
-      hasSubAreas(data)
-        ? pipe(
-            saveDataToFile(`_INFO.${area.code}.json`, folderToSaveTo, data),
-            Effect.tap((filename) => Console.log(`Saved: ${filename}`)),
-            Effect.andThen(() =>
-              data.regions.map((subArea) =>
-                processArea(
-                  subArea,
-                  path.join(folderToSaveTo, sanitizeFilename(subArea.name)),
-                  depth + 1,
-                  semaphore
-                ).pipe(Effect.fork)
-              )
-            ),
-            Effect.andThen((effects) => Effect.all(effects)),
-            Effect.andThen((fibers) => Fiber.joinAll(fibers))
-          )
-        : pipe(
-            saveDataToFile(`${area.code}.json`, folderToSaveTo, data),
-            Effect.tap((filename) => Console.log(`Saved: ${filename}`))
-          )
+    semaphore.withPermits(1)(
+      pipe(fetchUrl(getUrlBasedOnDepth(area.code, depth)))
     ),
+    Effect.tap((data) => {
+      if (hasSubAreas(data)) {
+        const filename = `_INFO.${area.code}.json`;
+        const newFolderToSaveTo = path.join(
+          folderToSaveTo,
+          sanitizeFilename(area.name)
+        );
+        return pipe(
+          saveDataToFile(filename, folderToSaveTo, data),
+          Effect.tap((filePath) => Console.log(`Saved: ${filePath}`)),
+          Effect.andThen(() =>
+            data.regions.map((subArea) =>
+              processArea(
+                subArea,
+                newFolderToSaveTo,
+                depth + 1,
+                semaphore
+              ).pipe(Effect.fork)
+            )
+          ),
+          Effect.andThen((effects) => Effect.all(effects)),
+          Effect.andThen((fibers) => Fiber.joinAll(fibers))
+        );
+      } else {
+        const filename = `${area.code}.json`;
+        return pipe(
+          saveDataToFile(filename, folderToSaveTo, data),
+          Effect.tap((filename) => Console.log(`Saved: ${filename}`))
+        );
+      }
+    }),
     Effect.catchTag("FileNotFoundError", () =>
       pipe(
         saveDataToFile(`_MISSING.${area.code}.json`, folderToSaveTo, null),
@@ -186,12 +196,7 @@ function program(maxThreads: number = 100) {
     ),
     Effect.andThen(({ data, semaphore }) =>
       data.regions.map((subArea) =>
-        processArea(
-          subArea,
-          path.join(DATA_DIRECTORY, sanitizeFilename(subArea.name)),
-          1,
-          semaphore
-        ).pipe(Effect.fork)
+        processArea(subArea, DATA_DIRECTORY, 1, semaphore).pipe(Effect.fork)
       )
     ),
     Effect.andThen((effects) => Effect.all(effects)),
