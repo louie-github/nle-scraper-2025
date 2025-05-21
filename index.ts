@@ -135,8 +135,7 @@ const processArea = (
   semaphore: Effect.Semaphore
 ): Effect.Effect<AreaData | ErData | null, never, never> =>
   pipe(
-    fetchUrl(getUrlBasedOnDepth(area.code, depth)),
-    semaphore.withPermits(1),
+    semaphore.withPermits(1)(fetchUrl(getUrlBasedOnDepth(area.code, depth))),
     Effect.tap((data) =>
       hasSubAreas(data)
         ? pipe(
