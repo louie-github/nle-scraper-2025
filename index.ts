@@ -124,6 +124,10 @@ function hasSubAreas(data: AreaData | ErData): data is AreaData {
   return (data as AreaData).regions !== undefined;
 }
 
+function sanitizeFilename(filename: string) {
+  return filename.replaceAll("/", "_").trim();
+}
+
 const processArea = (
   area: Area,
   folderToSaveTo: string,
@@ -142,7 +146,7 @@ const processArea = (
               data.regions.map((subArea) =>
                 processArea(
                   subArea,
-                  path.join(folderToSaveTo, subArea.name.replaceAll("/", "_")),
+                  path.join(folderToSaveTo, sanitizeFilename(subArea.name)),
                   depth + 1,
                   semaphore
                 ).pipe(Effect.fork)
@@ -185,7 +189,7 @@ function program(maxThreads: number = 100) {
       data.regions.map((subArea) =>
         processArea(
           subArea,
-          path.join(DATA_DIRECTORY, subArea.name.replaceAll("/", "_")),
+          path.join(DATA_DIRECTORY, sanitizeFilename(subArea.name)),
           1,
           semaphore
         ).pipe(Effect.fork)
