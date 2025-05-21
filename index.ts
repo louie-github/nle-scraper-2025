@@ -62,8 +62,8 @@ class UnknownStatusCodeError {
 }
 
 // Just a helper error. (Hack!)
-class IsElectionReturn {
-  readonly _tag = "IsElectionReturn";
+class FileExistsError {
+  readonly _tag = "FileExistsError";
 }
 
 // Effectful fetch with specific errors
@@ -120,6 +120,21 @@ function saveDataToFile(
   );
 }
 
+function errorIfFileExists(area: Area, folderToSaveTo: string) {
+  const infoPath = path.join(folderToSaveTo, `_INFO.${area.code}.json`);
+  const dataPath = path.join(folderToSaveTo, `${area.code}.json`);
+  return pipe(
+    Effect.tryPromise(
+      async () => (await exists(infoPath)) || (await exists(dataPath))
+    ),
+    // Bad, bad, bad. Hopefully this won't cause any major issues.
+    Effect.catchAll(() => Effect.succeed(null)),
+    Effect.andThen((fileExists) =>
+      fileExists ? Effect.fail(new FileExistsError()) : Effect.succeed(null)
+    )
+  );
+}
+
 function hasSubAreas(data: AreaData | ErData): data is AreaData {
   return (data as AreaData).regions !== undefined;
 }
@@ -135,7 +150,8 @@ const processArea = (
   semaphore: Effect.Semaphore
 ): Effect.Effect<AreaData | ErData | null, never, never> =>
   pipe(
-    fetchUrl(getUrlBasedOnDepth(area.code, depth)),
+    errorIfFileExists(area, folderToSaveTo),
+    Effect.andThen(() => fetchUrl(getUrlBasedOnDepth(area.code, depth))),
     semaphore.withPermits(1),
     Effect.tap((data) =>
       hasSubAreas(data)
@@ -167,6 +183,7 @@ const processArea = (
         Effect.andThen(() => Effect.succeed(null))
       )
     ),
+    // TODO: Log existing file name
     Effect.catchAll(() => Effect.succeed(null))
   );
 
