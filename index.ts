@@ -1,21 +1,17 @@
 import {
-  Array as EArray,
   Effect,
   Match,
   pipe,
   Schedule,
   String as EString,
   Console,
-  Queue,
-  Option,
-  Chunk,
   Fiber,
 } from "effect";
 import { type AreaData, type ErData, type Area } from "./utils";
 import { promises as fs } from "node:fs";
 import path from "path";
 import type { UnknownException } from "effect/Cause";
-import { mkdir } from "node:fs/promises";
+import { exists, mkdir } from "node:fs/promises";
 
 function getLocalAreaUrl(code: string) {
   return new URL(
@@ -136,6 +132,7 @@ const processArea = (
 ): Effect.Effect<AreaData | ErData | null, never, never> =>
   pipe(
     fetchUrl(getUrlBasedOnDepth(area.code, depth)),
+    semaphore.withPermits(1),
     Effect.tap((data) =>
       hasSubAreas(data)
         ? pipe(
@@ -158,6 +155,13 @@ const processArea = (
             saveDataToFile(`${area.code}.json`, folderToSaveTo, data),
             Effect.tap((filename) => Console.log(`Saved: ${filename}`))
           )
+    ),
+    Effect.catchTag("FileNotFoundError", () =>
+      pipe(
+        saveDataToFile(`_MISSING.${area.code}.json`, folderToSaveTo, null),
+        Effect.tap((filename) => Console.log(`Missing data: ${filename}`)),
+        Effect.andThen(() => Effect.succeed(null))
+      )
     ),
     Effect.catchAll(() => Effect.succeed(null))
   );
