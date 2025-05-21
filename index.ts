@@ -61,11 +61,6 @@ class UnknownStatusCodeError {
   readonly _tag = "UnknownStatusCodeError";
 }
 
-// Just a helper error. (Hack!)
-class IsElectionReturn {
-  readonly _tag = "IsElectionReturn";
-}
-
 // Effectful fetch with specific errors
 const fetchUrl = (
   url: URL,
@@ -132,11 +127,12 @@ const processArea = (
   area: Area,
   folderToSaveTo: string,
   depth: number,
+  isOverseas: boolean,
   semaphore: Effect.Semaphore
 ): Effect.Effect<AreaData | ErData | null, never, never> =>
   pipe(
     semaphore.withPermits(1)(
-      pipe(fetchUrl(getUrlBasedOnDepth(area.code, depth)))
+      pipe(fetchUrl(getUrlBasedOnDepth(area.code, depth, isOverseas)))
     ),
     Effect.tap((data) => {
       if (hasSubAreas(data)) {
@@ -154,6 +150,7 @@ const processArea = (
                 subArea,
                 newFolderToSaveTo,
                 depth + 1,
+                isOverseas,
                 semaphore
               ).pipe(Effect.fork)
             )
@@ -180,9 +177,9 @@ const processArea = (
   );
 
 const DATA_DIRECTORY = path.join(".", "data");
-function program(maxThreads: number = 100) {
+function program(isOverseas: boolean = false, maxThreads: number = 100) {
   return pipe(
-    fetchUrl(getUrlBasedOnDepth("0", 0)),
+    fetchUrl(getUrlBasedOnDepth("0", 0, isOverseas)),
     Effect.orDie,
     Effect.andThen((data) => data as AreaData),
     Effect.andThen((data) =>
@@ -196,7 +193,9 @@ function program(maxThreads: number = 100) {
     ),
     Effect.andThen(({ data, semaphore }) =>
       data.regions.map((subArea) =>
-        processArea(subArea, DATA_DIRECTORY, 1, semaphore).pipe(Effect.fork)
+        processArea(subArea, DATA_DIRECTORY, 1, isOverseas, semaphore).pipe(
+          Effect.fork
+        )
       )
     ),
     Effect.andThen((effects) => Effect.all(effects)),
@@ -204,4 +203,5 @@ function program(maxThreads: number = 100) {
   );
 }
 
-Effect.runPromise(program(100));
+const IS_OVERSEAS = false;
+Effect.runPromise(program(IS_OVERSEAS, 100));
