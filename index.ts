@@ -166,14 +166,26 @@ function processArea(
   const savePath = path.join(workingDirectory, sanitizePathName(area.name));
   return Effect.gen(function* () {
     // Read from existing JSON file before fetching
-    const data = yield* Effect.firstSuccessOf([
+    const cachedData = yield* Effect.firstSuccessOf([
       readJson<AreaData>(savePath, getInfoJsonFilename(area.code)),
       readJson<ErData>(savePath, getErJsonFilename(area.code)),
-      semaphore.withPermits(1)(
-        fetchUrl(getUrlBasedOnDepth(area.code, depth, isOverseas))
-      ),
+      Effect.succeed(null), // fallback
     ]);
+    if (cachedData !== null) {
+      const filePath = path.join(
+        savePath,
+        hasSubAreas(cachedData)
+          ? getInfoJsonFilename(area.code)
+          : getErJsonFilename(area.code)
+      );
+      yield* Console.log(`Existing file: ${filePath}`);
+      return cachedData;
+    }
 
+    // Otherwise, fetch the data, then save.
+    const data = yield* semaphore.withPermits(1)(
+      fetchUrl(getUrlBasedOnDepth(area.code, depth, isOverseas))
+    );
     // Case 1: AreaData
     if (hasSubAreas(data)) {
       const filePath = yield* saveDataToFile(
