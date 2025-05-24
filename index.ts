@@ -179,7 +179,7 @@ function processArea(
     const cachedFilename = getFilenameBasedOnDepth(area.code, depth);
     const cachedData = yield* Effect.firstSuccessOf([
       readJson<AreaData>(savePath, cachedFilename),
-      readJson<ErData>(savePath, cachedFilename),
+      readJson<ErData>(workingDirectory, cachedFilename),
       Effect.succeed(null),
     ]) as Effect.Effect<AreaData | ErData | null, never, never>;
     if (cachedData !== null) {
