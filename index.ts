@@ -64,6 +64,14 @@ class InvalidJsonError {
   readonly _tag = "InvalidJsonError";
 }
 
+function hasSubAreas(data: AreaData | ErData): data is AreaData {
+  return (data as AreaData).regions !== undefined;
+}
+
+function hasErData(data: any): data is ErData {
+  return typeof (data as ErData).totalErReceived === "number";
+}
+
 // Effectful fetch with specific errors
 function fetchUrl<T = AreaData | ErData>(
   url: URL,
@@ -100,45 +108,46 @@ function fetchUrl<T = AreaData | ErData>(
   );
 }
 
-// TODO: Extract out into constants, type union, or something.
-const getMissingJsonFilename = (code: string) => `_MISSING.${code}.json`;
-const getInfoJsonFilename = (code: string) => `_INFO.${code}.json`;
-const getErJsonFilename = (code: string) => `ER.${code}.json`;
+function sanitizePathName(filename: string) {
+  return filename.replaceAll("/", "_").trim();
+}
+
+function getFilenameBasedOnData(codeOrFilename: string, data: any): string {
+  if (data === null) {
+    return `_MISSING.${codeOrFilename}.json`;
+  } else if (hasSubAreas(data)) {
+    return `_INFO.${codeOrFilename}.json`;
+  } else if (hasErData(data)) {
+    return `ER.${codeOrFilename}.json`;
+  } else {
+    return codeOrFilename;
+  }
+}
+
+// Hacky!
+const getFilenameBasedOnDepth = (code: string, depth: number): string =>
+  depth <= 5 ? `_INFO.${code}.json` : `ER.${code}.json`;
 
 /* Save a JSON representation of the data to folderPath with filename.
  * By default, it creates the directory if it does not already exist.
  */
-function saveDataToFile(
-  filename: string,
+function saveJson<T = any>(
+  codeOrFilename: string,
   folderPath: string,
   data: any,
   makeDirectory: boolean = true
-) {
-  return pipe(
-    Effect.if(makeDirectory, {
-      onTrue: () =>
-        Effect.tryPromise(() => mkdir(folderPath, { recursive: true })),
-      onFalse: () => Effect.succeed(null),
-    }),
-    Effect.andThen(() =>
-      Effect.tryPromise(() =>
-        fs.writeFile(
-          path.join(folderPath, `${filename}`),
-          JSON.stringify(data),
-          "utf8"
-        )
-      )
-    ),
-    Effect.andThen(() => Effect.succeed(path.join(folderPath, filename)))
-  );
-}
-
-function hasSubAreas(data: AreaData | ErData): data is AreaData {
-  return (data as AreaData).regions !== undefined;
-}
-
-function sanitizePathName(filename: string) {
-  return filename.replaceAll("/", "_").trim();
+): Effect.Effect<string, UnknownException, never> {
+  return Effect.gen(function* () {
+    const filename = getFilenameBasedOnData(codeOrFilename, data);
+    if (makeDirectory) {
+      yield* Effect.tryPromise(() => mkdir(folderPath, { recursive: true }));
+    }
+    const joinedPath = path.join(folderPath, `${filename}`);
+    yield* Effect.tryPromise(() =>
+      fs.writeFile(joinedPath, JSON.stringify(data), "utf8")
+    );
+    return joinedPath;
+  });
 }
 
 function readJson<T>(
@@ -146,13 +155,12 @@ function readJson<T>(
   filename: string,
   encoding: BufferEncoding = "utf-8"
 ) {
-  return Effect.tryPromise(
-    async () =>
-      JSON.parse(
-        await fs.readFile(path.join(folderPath, filename), {
-          encoding: encoding,
-        })
-      ) as T
+  return pipe(
+    Effect.tryPromise(() =>
+      fs.readFile(path.join(folderPath, filename), { encoding: encoding })
+    ),
+    Effect.andThen((data) => JSON.parse(data)),
+    Effect.andThen((data) => data as T)
   );
 }
 
@@ -166,64 +174,47 @@ function processArea(
   const savePath = path.join(workingDirectory, sanitizePathName(area.name));
   return Effect.gen(function* () {
     // Read from existing JSON file before fetching
-    const cachedData = yield* Effect.firstSuccessOf([
-      readJson<AreaData>(savePath, getInfoJsonFilename(area.code)),
-      readJson<ErData>(savePath, getErJsonFilename(area.code)),
-      Effect.succeed(null), // fallback
-    ]);
+    const cachedFilename = getFilenameBasedOnDepth(area.code, depth);
+    const cachedData = yield* pipe(
+      readJson<AreaData | ErData>(savePath, cachedFilename),
+      Effect.orElseSucceed(() => null)
+    );
     if (cachedData !== null) {
-      const filePath = path.join(
-        savePath,
-        hasSubAreas(cachedData)
-          ? getInfoJsonFilename(area.code)
-          : getErJsonFilename(area.code)
+      yield* Console.log(
+        `Existing file: ${path.join(savePath, cachedFilename)}`
       );
-      yield* Console.log(`Existing file: ${filePath}`);
-      return cachedData;
     }
 
     // Otherwise, fetch the data, then save.
     const data = yield* semaphore.withPermits(1)(
       fetchUrl(getUrlBasedOnDepth(area.code, depth, isOverseas))
     );
-    // Case 1: AreaData
     if (hasSubAreas(data)) {
-      const filePath = yield* saveDataToFile(
-        getInfoJsonFilename(area.code),
-        savePath,
-        data
-      );
+      const filePath = yield* saveJson(area.code, savePath, data);
       yield* Console.log(`[Area] Saved: ${filePath}`);
-
-      const fibers = yield* Effect.all(
-        data.regions.map((subArea) =>
-          Effect.fork(
-            processArea(subArea, savePath, depth + 1, isOverseas, semaphore)
-          )
+      const effects = data.regions.map((subArea) =>
+        Effect.fork(
+          processArea(subArea, savePath, depth + 1, isOverseas, semaphore)
         )
       );
+      const fibers = yield* Effect.all(effects);
       yield* Fiber.joinAll(fibers);
     } else {
-      const filePath = yield* saveDataToFile(
-        getErJsonFilename(area.code),
-        savePath,
-        data
-      );
+      const filePath = yield* saveJson(area.code, savePath, data);
       yield* Console.log(`[Election Return] Saved: ${filePath}`);
     }
-
     return data;
   }).pipe(
     Effect.catchTag("FileNotFoundError", () =>
       pipe(
-        saveDataToFile(getMissingJsonFilename(area.code), savePath, null),
+        saveJson(area.code, savePath, null),
         Effect.tap((filename) => Console.log(`Missing data: ${filename}`)),
         Effect.andThen(() => Effect.succeed(null))
       )
     ),
     // TODO: Handle other errors.
     Effect.catchAll(() => Effect.succeed(null))
-  );
+  ) as Effect.Effect<AreaData | ErData | null, never, never>;
 }
 
 const DATA_DIRECTORY = path.join(".", "data");
