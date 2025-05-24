@@ -164,34 +164,42 @@ function readJson<T>(
   );
 }
 
+// TODO: Move some arguments into options object
 function processArea(
   area: Area,
   workingDirectory: string,
   depth: number,
   isOverseas: boolean,
-  semaphore: Effect.Semaphore
+  semaphore: Effect.Semaphore,
+  shouldSaveData: boolean = true
 ): Effect.Effect<AreaData | ErData | null, never, never> {
   const savePath = path.join(workingDirectory, sanitizePathName(area.name));
   return Effect.gen(function* () {
     // Read from existing JSON file before fetching
     const cachedFilename = getFilenameBasedOnDepth(area.code, depth);
-    const cachedData = yield* pipe(
-      readJson<AreaData | ErData>(savePath, cachedFilename),
-      Effect.orElseSucceed(() => null)
-    );
+    const cachedData = yield* Effect.firstSuccessOf([
+      readJson<AreaData>(savePath, cachedFilename),
+      readJson<ErData>(savePath, cachedFilename),
+      Effect.succeed(null),
+    ]) as Effect.Effect<AreaData | ErData | null, never, never>;
     if (cachedData !== null) {
       yield* Console.log(
         `Existing file: ${path.join(savePath, cachedFilename)}`
       );
+      shouldSaveData = false;
     }
 
     // Otherwise, fetch the data, then save.
-    const data = yield* semaphore.withPermits(1)(
-      fetchUrl(getUrlBasedOnDepth(area.code, depth, isOverseas))
-    );
+    const data =
+      cachedData ??
+      (yield* semaphore.withPermits(1)(
+        fetchUrl(getUrlBasedOnDepth(area.code, depth, isOverseas))
+      ));
     if (hasSubAreas(data)) {
-      const filePath = yield* saveJson(area.code, savePath, data);
-      yield* Console.log(`[Area] Saved: ${filePath}`);
+      if (shouldSaveData) {
+        const filePath = yield* saveJson(area.code, savePath, data);
+        yield* Console.log(`[Area] Saved: ${filePath}`);
+      }
       const effects = data.regions.map((subArea) =>
         Effect.fork(
           processArea(subArea, savePath, depth + 1, isOverseas, semaphore)
@@ -200,7 +208,8 @@ function processArea(
       const fibers = yield* Effect.all(effects);
       yield* Fiber.joinAll(fibers);
     } else {
-      const filePath = yield* saveJson(area.code, savePath, data);
+      // IMPORTANT: Saves to workingDirectory, not savePath!
+      const filePath = yield* saveJson(area.code, workingDirectory, data);
       yield* Console.log(`[Election Return] Saved: ${filePath}`);
     }
     return data;
