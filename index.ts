@@ -126,7 +126,7 @@ function getFilenameBasedOnData(codeOrFilename: string, data: any): string {
 
 // Hacky!
 const getFilenameBasedOnDepth = (code: string, depth: number): string =>
-  depth <= 5 ? `_INFO.${code}.json` : `ER.${code}.json`;
+  depth < 5 ? `_INFO.${code}.json` : `ER.${code}.json`;
 
 /* Save a JSON representation of the data to folderPath with filename.
  * By default, it creates the directory if it does not already exist.
@@ -176,15 +176,22 @@ function processArea(
   const savePath = path.join(workingDirectory, sanitizePathName(area.name));
   return Effect.gen(function* () {
     // Read from existing JSON file before fetching
-    const cachedFilename = getFilenameBasedOnDepth(area.code, depth);
     const cachedData = yield* Effect.firstSuccessOf([
-      readJson<AreaData>(savePath, cachedFilename),
-      readJson<ErData>(workingDirectory, cachedFilename),
+      // Hacky!
+      depth < 5
+        ? readJson<AreaData>(savePath, `_INFO.${area.code}.json`)
+        : readJson<ErData>(workingDirectory, `ER.${area.code}.json`),
       Effect.succeed(null),
     ]) as Effect.Effect<AreaData | ErData | null, never, never>;
     if (cachedData !== null) {
       yield* Console.log(
-        `Existing file: ${path.join(savePath, cachedFilename)}`
+        // Super hacky / janky.
+        `${
+          depth < 5 ? "[Area]" : "[Election Return]"
+        } Existing file: ${path.join(
+          savePath,
+          getFilenameBasedOnData(area.code, cachedData)
+        )}`
       );
       shouldSaveData = false;
     }
