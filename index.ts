@@ -216,8 +216,10 @@ function processArea(
       yield* Fiber.joinAll(fibers);
     } else {
       // IMPORTANT: Saves to workingDirectory, not savePath!
-      const filePath = yield* saveJson(area.code, workingDirectory, data);
-      yield* Console.log(`[Election Return] Saved: ${filePath}`);
+      if (shouldSaveData) {
+        const filePath = yield* saveJson(area.code, workingDirectory, data);
+        yield* Console.log(`[Election Return] Saved: ${filePath}`);
+      }
     }
     return data;
   }).pipe(
