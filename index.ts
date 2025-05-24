@@ -254,6 +254,9 @@ function program(isOverseas: boolean = false, maxThreads: number = 100) {
   });
 }
 
-Effect.runPromise(program(true, 100)).then(
-  Effect.runPromise(program(false, 100)),
+Effect.runPromise(
+  pipe(
+    program(false, 100),
+    Effect.tap(() => program(true, 100)),
+  ),
 );
