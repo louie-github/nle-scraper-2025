@@ -60,20 +60,36 @@ class FileNotFoundError {
 class UnknownStatusCodeError {
   readonly _tag = "UnknownStatusCodeError";
 }
+class InvalidJsonError {
+  readonly _tag = "InvalidJsonError";
+}
 
 // Effectful fetch with specific errors
-const fetchUrl = (
+function fetchUrl<T = AreaData | ErData>(
   url: URL,
   policy: Schedule.Schedule<any, any, never> = Schedule.intersect(
     Schedule.recurs(5),
     Schedule.exponential("100 millis")
   )
-) =>
-  pipe(
+): Effect.Effect<
+  T,
+  | FileNotFoundError
+  | UnknownStatusCodeError
+  | InvalidJsonError
+  | UnknownException,
+  never
+> {
+  return pipe(
     Effect.tryPromise(() => fetch(url)),
     Effect.andThen((response) =>
       Match.value(response.status).pipe(
-        Match.when(200, () => Effect.promise(() => response.json())),
+        Match.when(200, () =>
+          pipe(
+            Effect.tryPromise(() => response.json()),
+            Effect.map((data) => data as T),
+            Effect.orElseFail(() => new InvalidJsonError())
+          )
+        ),
         // This also fails when Cloudflare blocks the request, but
         // otherwise, this should represent a missing file.
         Match.when(403, () => Effect.fail(new FileNotFoundError())),
@@ -81,11 +97,13 @@ const fetchUrl = (
       )
     ),
     Effect.retry(policy)
-  ) as Effect.Effect<
-    AreaData | ErData,
-    FileNotFoundError | UnknownStatusCodeError | UnknownException,
-    never
-  >;
+  );
+}
+
+// TODO: Extract out into constants, type union, or something.
+const getMissingJsonFilename = (code: string) => `_MISSING.${code}.json`;
+const getInfoJsonFilename = (code: string) => `_INFO.${code}.json`;
+const getErJsonFilename = (code: string) => `ER.${code}.json`;
 
 /* Save a JSON representation of the data to folderPath with filename.
  * By default, it creates the directory if it does not already exist.
@@ -119,88 +137,99 @@ function hasSubAreas(data: AreaData | ErData): data is AreaData {
   return (data as AreaData).regions !== undefined;
 }
 
-function sanitizeFilename(filename: string) {
+function sanitizePathName(filename: string) {
   return filename.replaceAll("/", "_").trim();
 }
 
-const processArea = (
+function readJson<T>(
+  folderPath: string,
+  filename: string,
+  encoding: BufferEncoding = "utf-8"
+) {
+  return Effect.tryPromise(
+    async () =>
+      JSON.parse(
+        await fs.readFile(path.join(folderPath, filename), {
+          encoding: encoding,
+        })
+      ) as T
+  );
+}
+
+function processArea(
   area: Area,
-  folderToSaveTo: string,
+  workingDirectory: string,
   depth: number,
   isOverseas: boolean,
   semaphore: Effect.Semaphore
-): Effect.Effect<AreaData | ErData | null, never, never> =>
-  pipe(
-    semaphore.withPermits(1)(
-      pipe(fetchUrl(getUrlBasedOnDepth(area.code, depth, isOverseas)))
-    ),
-    Effect.tap((data) => {
-      if (hasSubAreas(data)) {
-        const filename = `_INFO.${area.code}.json`;
-        const newFolderToSaveTo = path.join(
-          folderToSaveTo,
-          sanitizeFilename(area.name)
-        );
-        return pipe(
-          saveDataToFile(filename, newFolderToSaveTo, data),
-          Effect.tap((filePath) => Console.log(`Saved: ${filePath}`)),
-          Effect.andThen(() =>
-            data.regions.map((subArea) =>
-              processArea(
-                subArea,
-                newFolderToSaveTo,
-                depth + 1,
-                isOverseas,
-                semaphore
-              ).pipe(Effect.fork)
-            )
-          ),
-          Effect.andThen((effects) => Effect.all(effects)),
-          Effect.andThen((fibers) => Fiber.joinAll(fibers))
-        );
-      } else {
-        const filename = `${area.code}.json`;
-        return pipe(
-          saveDataToFile(filename, folderToSaveTo, data),
-          Effect.tap((filename) => Console.log(`Saved: ${filename}`))
-        );
-      }
-    }),
+): Effect.Effect<AreaData | ErData | null, never, never> {
+  const savePath = path.join(workingDirectory, sanitizePathName(area.name));
+  return Effect.gen(function* () {
+    // Read from existing JSON file before fetching
+    const data = yield* Effect.firstSuccessOf([
+      readJson<AreaData>(savePath, getInfoJsonFilename(area.code)),
+      readJson<ErData>(savePath, getErJsonFilename(area.code)),
+      semaphore.withPermits(1)(
+        fetchUrl(getUrlBasedOnDepth(area.code, depth, isOverseas))
+      ),
+    ]);
+
+    // Case 1: AreaData
+    if (hasSubAreas(data)) {
+      const filePath = yield* saveDataToFile(
+        getInfoJsonFilename(area.code),
+        savePath,
+        data
+      );
+      yield* Console.log(`[Area] Saved: ${filePath}`);
+
+      const fibers = yield* Effect.all(
+        data.regions.map((subArea) =>
+          Effect.fork(
+            processArea(subArea, savePath, depth + 1, isOverseas, semaphore)
+          )
+        )
+      );
+      yield* Fiber.joinAll(fibers);
+    } else {
+      const filePath = yield* saveDataToFile(
+        getErJsonFilename(area.code),
+        savePath,
+        data
+      );
+      yield* Console.log(`[Election Return] Saved: ${filePath}`);
+    }
+
+    return data;
+  }).pipe(
     Effect.catchTag("FileNotFoundError", () =>
       pipe(
-        saveDataToFile(`_MISSING.${area.code}.json`, folderToSaveTo, null),
+        saveDataToFile(getMissingJsonFilename(area.code), savePath, null),
         Effect.tap((filename) => Console.log(`Missing data: ${filename}`)),
         Effect.andThen(() => Effect.succeed(null))
       )
     ),
+    // TODO: Handle other errors.
     Effect.catchAll(() => Effect.succeed(null))
   );
+}
 
 const DATA_DIRECTORY = path.join(".", "data");
 function program(isOverseas: boolean = false, maxThreads: number = 100) {
-  return pipe(
-    fetchUrl(getUrlBasedOnDepth("0", 0, isOverseas)),
-    Effect.orDie,
-    Effect.andThen((data) => data as AreaData),
-    Effect.andThen((data) =>
-      pipe(
-        Effect.makeSemaphore(maxThreads),
-        Effect.andThen((semaphore) => ({
-          data: data,
-          semaphore: semaphore,
-        }))
-      )
-    ),
-    Effect.andThen(({ data, semaphore }) =>
+  return Effect.gen(function* () {
+    const data = (yield* fetchUrl(
+      getUrlBasedOnDepth("0", 0, isOverseas)
+    )) as AreaData;
+    const semaphore = yield* Effect.makeSemaphore(maxThreads);
+    const fibers = yield* Effect.all(
       data.regions.map((subArea) =>
-        processArea(subArea, DATA_DIRECTORY, 1, isOverseas, semaphore).pipe(
-          Effect.fork
+        Effect.fork(
+          processArea(subArea, DATA_DIRECTORY, 1, isOverseas, semaphore)
         )
       )
-    ),
-    Effect.andThen((effects) => Effect.all(effects)),
-    Effect.andThen((fibers) => Fiber.joinAll(fibers))
-  );
+    );
+    yield* Fiber.joinAll(fibers);
+  });
 }
 
 const IS_OVERSEAS = false;
