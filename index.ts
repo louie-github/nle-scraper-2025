@@ -216,7 +216,8 @@ function processArea(
   }).pipe(
     Effect.catchTag("FileNotFoundError", () =>
       pipe(
-        saveJson(area.code, savePath, null),
+        // Again, hacky.
+        saveJson(area.code, depth <= 5 ? savePath : workingDirectory, null),
         Effect.tap((filename) => Console.log(`Missing data: ${filename}`)),
         Effect.andThen(() => Effect.succeed(null))
       )
@@ -244,5 +245,5 @@ function program(isOverseas: boolean = false, maxThreads: number = 100) {
   });
 }
 
-const IS_OVERSEAS = false;
-Effect.runPromise(program(IS_OVERSEAS, 100));
+Effect.runPromise(program(true, 100));
+Effect.runPromise(program(false, 100));
