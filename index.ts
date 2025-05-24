@@ -142,7 +142,7 @@ const processArea = (
           sanitizeFilename(area.name)
         );
         return pipe(
-          saveDataToFile(filename, folderToSaveTo, data),
+          saveDataToFile(filename, newFolderToSaveTo, data),
           Effect.tap((filePath) => Console.log(`Saved: ${filePath}`)),
           Effect.andThen(() =>
             data.regions.map((subArea) =>
