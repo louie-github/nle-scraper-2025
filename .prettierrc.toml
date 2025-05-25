@@ -1,0 +1,2 @@
+# Fix esbenp.prettier-vscode having old defaults
+trailingComma = "all"
