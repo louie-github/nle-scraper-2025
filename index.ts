@@ -131,7 +131,7 @@ const getFilenameBasedOnDepth = (code: string, depth: number): string =>
 /* Save a JSON representation of the data to folderPath with filename.
  * By default, it creates the directory if it does not already exist.
  */
-function saveJson<T = any>(
+function saveJson(
   codeOrFilename: string,
   folderPath: string,
   data: any,
@@ -162,6 +162,11 @@ function readJson<T>(
     Effect.andThen((data) => JSON.parse(data)),
     Effect.andThen((data) => data as T),
   );
+}
+
+function deleteJson(filename: string, folderPath: string) {
+  const joinedPath = path.join(folderPath, `${filename}`);
+  return Effect.tryPromise(() => fs.unlink(joinedPath));
 }
 
 // TODO: Move some arguments into options object
@@ -204,6 +209,16 @@ function processArea(
       ));
     if (hasSubAreas(data)) {
       if (shouldSaveData) {
+        yield* pipe(
+          deleteJson(`_MISSING.${area.code}.json`, savePath),
+          Effect.tap(() =>
+            Console.log(
+              "Deleted missing data marker: " +
+                path.join(savePath, `_MISSING.${area.code}.json`),
+            ),
+          ),
+          Effect.orElseSucceed(() => null),
+        );
         const filePath = yield* saveJson(area.code, savePath, data);
         yield* Console.log(`[Area] Saved: ${filePath}`);
       }
@@ -217,6 +232,16 @@ function processArea(
     } else {
       // IMPORTANT: Saves to workingDirectory, not savePath!
       if (shouldSaveData) {
+        yield* pipe(
+          deleteJson(`_MISSING.${area.code}.json`, savePath),
+          Effect.tap(() =>
+            Console.log(
+              "Deleted missing data marker: " +
+                path.join(savePath, `_MISSING.${area.code}.json`),
+            ),
+          ),
+          Effect.orElseSucceed(() => null),
+        );
         const filePath = yield* saveJson(area.code, workingDirectory, data);
         yield* Console.log(`[Election Return] Saved: ${filePath}`);
       }
