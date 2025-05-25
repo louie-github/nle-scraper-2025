@@ -1,7 +1,7 @@
 {
   "name": "nle-scraper-2025",
   "license": "MIT",
-  "module": "index.ts",
+  "module": "scraper.ts",
   "type": "module",
   "private": true,
   "devDependencies": {
