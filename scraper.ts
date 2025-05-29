@@ -267,6 +267,12 @@ function program(isOverseas: boolean = false, maxThreads: number = 100) {
     const data = (yield* fetchUrl(
       getUrlBasedOnDepth("0", 0, isOverseas),
     )) as AreaData;
+    const filePath = yield* saveJson(
+      isOverseas ? "OVERSEAS_0" : "LOCAL_0",
+      DATA_DIRECTORY,
+      data,
+    );
+    yield* Console.log(`[Base JSON] Saved: ${filePath}`);
     const semaphore = yield* Effect.makeSemaphore(maxThreads);
     const fibers = yield* Effect.all(
       data.regions.map((subArea) =>
