@@ -1,7 +1,7 @@
-DROP TABLE IF EXISTS area_info;
-DROP TABLE IF EXISTS area_admin_level;
-DROP TABLE IF EXISTS precinct_info;
-DROP TABLE IF EXISTS senate_results;
+-- DROP TABLE IF EXISTS area_info;
+-- DROP TABLE IF EXISTS area_admin_level;
+-- DROP TABLE IF EXISTS precinct_info;
+-- DROP TABLE IF EXISTS senate_results;
 
 CREATE TABLE IF NOT EXISTS area_info (
     code TEXT PRIMARY KEY,
